@@ -34,6 +34,48 @@ def clip_classifier(classnames, template, clip_model):
         clip_weights = torch.stack(clip_weights, dim=1).cuda()
     return clip_weights
 
+def centroid(cache_keys: torch.tensor, cache_values: torch.tensor) -> tuple[torch.tensor, torch.tensor]:
+    cache_keys = cache_keys.permute(1, 0)
+    ###
+    assert(cache_keys.size(0) == cache_values.size(0))
+
+    num_classes = cache_values.size(1)
+    average_keys = [[] for _ in range(num_classes)]
+    average_values = [[] for _ in range(num_classes)]
+    cnt = [0 for _ in range(num_classes)]
+    for i in range(cache_keys.size(0)):
+        key = cache_keys[i:i+1,:]
+        value = cache_values[i:i+1,:]
+
+        assert((value > 0.5).sum().item() == 1)
+        index = (value > 0.5).nonzero(as_tuple=False)
+        index = index[0, 1].item()
+
+        average_keys[index].append(key)
+        average_values[index].append(value)
+        cnt[index] += 1
+    print(cnt)
+    print(cache_keys.size())
+    print(average_keys[1][0].size())
+
+    for i in range(num_classes):
+        average_keys[i] = torch.cat(average_keys[i], dim=0)
+        average_values[i] = torch.cat(average_values[i], dim=0)
+
+        average_keys[i] = average_keys[i].mean(dim=0, keepdim=True)
+        average_values[i] = average_values[i].mean(dim=0, keepdim=True)
+
+    average_keys = torch.cat(average_keys, dim=0)
+    average_keys /= average_keys.norm(dim=-1, keepdim=True)
+    average_values = torch.cat(average_values, dim=0)
+
+    cache_keys = average_keys
+    cache_values = average_values
+
+    ###
+    assert(cache_keys.size(0) == cache_values.size(0))
+    cache_keys = cache_keys.permute(1, 0)
+    return cache_keys, cache_values
 
 def build_cache_model(cfg, clip_model, train_loader_cache):
 
@@ -56,10 +98,13 @@ def build_cache_model(cfg, clip_model, train_loader_cache):
                         cache_values.append(target)
                 cache_keys.append(torch.cat(train_features, dim=0).unsqueeze(0))
             
-        cache_keys = torch.cat(cache_keys, dim=0).mean(dim=0)
+        cache_keys = torch.cat(cache_keys, dim=0)
+        cache_keys = cache_keys.mean(dim=0)
         cache_keys /= cache_keys.norm(dim=-1, keepdim=True)
+        cache_lable = torch.cat(cache_values, dim=0)
+        cache_values = F.one_hot(cache_lable).half()
+
         cache_keys = cache_keys.permute(1, 0)
-        cache_values = F.one_hot(torch.cat(cache_values, dim=0)).half()
 
         torch.save(cache_keys, cfg['cache_dir'] + '/keys_' + str(cfg['shots']) + "shots.pt")
         torch.save(cache_values, cfg['cache_dir'] + '/values_' + str(cfg['shots']) + "shots.pt")
@@ -68,6 +113,7 @@ def build_cache_model(cfg, clip_model, train_loader_cache):
         cache_keys = torch.load(cfg['cache_dir'] + '/keys_' + str(cfg['shots']) + "shots.pt")
         cache_values = torch.load(cfg['cache_dir'] + '/values_' + str(cfg['shots']) + "shots.pt")
 
+    cache_keys, cache_values = centroid(cache_keys, cache_values)
     return cache_keys, cache_values
 
 
